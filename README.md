@@ -20,12 +20,16 @@ score when the real flight goes through them.
 - **Tower calls** ("hoop a wide-body", "hoop an overseas airline") pay triple
   for a matching aircraft. Labels only show a callsign and an ICAO type code,
   so it helps to know your fleet.
+- The tower reads its calls out loud, along with golden planes, streaks,
+  time checks and your final score, using your browser's built-in speech
+  voice (Australian if your device has one).
 - A round is two minutes. Drag to look around, scroll to zoom.
 
 | Key | Action |
 |---|---|
 | `Space` | Start / play again |
 | `M` | Sound on / off |
+| `V` | Tower voice on / off |
 | `N` | Day / night |
 | `L` | Aircraft labels |
 | `Esc` | Back to the title |
@@ -39,7 +43,8 @@ late-afternoon peak, and a weekday evening after dark.
 It is a static site: no build step and no server.
 
 - `index.html`, `game.js`, `game.css` — the game: hoops, scoring, effects, and
-  sound (all synthesised with WebAudio, there are no audio files).
+  sound (all synthesised with WebAudio, plus the browser's speech synthesis
+  for the tower voice; there are no audio files).
 - `sky.js`, `sky.css` — the 3D replay engine (three.js): smooths the raw
   ~10-second position reports into continuous flight paths, picks a 3D model
   per aircraft class, and draws the trails, map and sky.

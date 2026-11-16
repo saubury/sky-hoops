@@ -115,6 +115,7 @@ function unlockAudio() {
     if (silentEl && silentEl.paused) silentEl.play().catch(() => {});
   } catch {}
   // First sound from inside the gesture: some iOS versions only truly start the context once something plays.
+  if (V.synth && !V.primed) { V.primed = true; const u = new SpeechSynthesisUtterance(" "); u.volume = 0; V.synth.speak(u); }
   if (!A.kicked) { A.kicked = true; const o = A.ctx.createOscillator(), g = A.ctx.createGain(); g.gain.value = 0.0001; o.connect(g); g.connect(A.ctx.destination); o.start(); o.stop(A.ctx.currentTime + 0.05); }
 }
 ["touchend", "click", "keydown"].forEach((ev) => window.addEventListener(ev, unlockAudio, { capture: true, passive: true }));
@@ -217,10 +218,99 @@ function musicStop() { clearInterval(A.timer); A.playing = false; }
 
 function setMuted(m) {
   A.muted = m;
+  if (m) hush();
   if (A.master) A.master.gain.setTargetAtTime(m ? 0 : 0.9, A.ctx.currentTime, 0.02);
   $("gMute").textContent = m ? "♪ off" : "♪ on";
   try { localStorage.setItem("sky.hoops.muted", m ? "1" : "0"); } catch {}
 }
+
+// ---------------------------------------------------------------------------
+// Tower voice: announcements are spoken with the browser's built-in speech
+// synthesis (still no audio files). Speech can't be routed through WebAudio,
+// so the radio feel comes from around it: a squelch click to key the mic, a
+// bed of static while the tower talks, and the music ducked underneath.
+// ---------------------------------------------------------------------------
+
+const V = { synth: window.speechSynthesis || null, on: true, voice: null, cur: null, curPri: -1, pending: null, watchdog: 0, hiss: null, primed: false };
+try { V.on = localStorage.getItem("sky.hoops.voice") !== "0"; } catch {}
+
+// An Australian voice if the device has one, then British, then any English.
+function pickVoice() {
+  const rank = (v) => (/^en[-_]AU/i.test(v.lang) ? 0 : /^en[-_]GB/i.test(v.lang) ? 2 : 4) + (v.localService ? 0 : 1);
+  V.voice = V.synth.getVoices().filter((v) => /^en/i.test(v.lang)).sort((a, b) => rank(a) - rank(b))[0] || null;
+}
+
+function radio(on) {
+  if (!A.ctx) return;
+  A.music.gain.setTargetAtTime(on ? 0.12 : 0.34, A.ctx.currentTime, 0.08);
+  if (on && !V.hiss) {
+    const src = A.ctx.createBufferSource(), f = A.ctx.createBiquadFilter(), g = A.ctx.createGain();
+    src.buffer = A.noiseBuf; src.loop = true;
+    f.type = "bandpass"; f.frequency.value = 2200; f.Q.value = 0.7; g.gain.value = 0.028;
+    src.connect(f); f.connect(g); g.connect(A.sfx); src.start();
+    V.hiss = src;
+    noise({ dur: 0.05, g: 0.16, from: 2600, to: 2600, q: 4 });
+  } else if (!on && V.hiss) {
+    V.hiss.stop(); V.hiss = null;
+    noise({ dur: 0.08, g: 0.14, from: 3200, to: 1400, q: 2 });
+  }
+}
+
+// pri 2 interrupts whatever is being said; pri 1 waits its turn (one slot,
+// dropped if it goes stale); pri 0 is colour and is skipped when the tower is busy.
+function say(text, pri = 1) {
+  if (!V.synth || !V.on || A.muted) return;
+  if (V.cur) {
+    if (pri <= V.curPri) { if (pri > 0) V.pending = { text, pri, by: performance.now() + 5000 }; return; }
+    V.synth.cancel();
+  }
+  if (!V.voice) pickVoice();
+  const u = new SpeechSynthesisUtterance(text);
+  if (V.voice) { u.voice = V.voice; u.lang = V.voice.lang; } else u.lang = "en-AU";
+  u.rate = 1.12; u.pitch = 0.8; // clipped and level, like someone who has said it a thousand times today
+  const done = () => {
+    if (V.cur !== u) return; // an interrupted utterance reporting in late
+    clearTimeout(V.watchdog);
+    V.cur = null; V.curPri = -1;
+    radio(false);
+    const next = V.pending; V.pending = null;
+    if (next && performance.now() < next.by) say(next.text, next.pri);
+  };
+  u.onend = u.onerror = done;
+  V.cur = u; V.curPri = pri; V.pending = null;
+  clearTimeout(V.watchdog);
+  V.watchdog = setTimeout(done, 2500 + text.length * 110); // some browsers never fire onend
+  radio(true);
+  V.synth.speak(u);
+}
+
+function hush() {
+  clearTimeout(V.watchdog);
+  V.cur = V.pending = null; V.curPri = -1;
+  if (V.synth) V.synth.cancel();
+  radio(false);
+}
+
+function setVoice(on) {
+  V.on = on;
+  if (!on) hush();
+  $("gVoice").textContent = on ? "ATC on" : "ATC off";
+  try { localStorage.setItem("sky.hoops.voice", on ? "1" : "0"); } catch {}
+}
+
+// Callsigns the way a controller reads them: "QFA427" is "Qantas four two
+// seven", and an aircraft flying under its registration goes by its last
+// three letters, "VH-XKQ" is "X-ray Kilo Quebec".
+const DIGITS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "niner"];
+const NATO = { A: "Alpha", B: "Bravo", C: "Charlie", D: "Delta", E: "Echo", F: "Foxtrot", G: "Golf", H: "Hotel", I: "India", J: "Juliett", K: "Kilo", L: "Lima", M: "Mike", N: "November", O: "Oscar", P: "Papa", Q: "Quebec", R: "Romeo", S: "Sierra", T: "Tango", U: "Uniform", V: "Victor", W: "Whiskey", X: "X-ray", Y: "Yankee", Z: "Zulu" };
+const spell = (str) => [...str.toUpperCase()].map((c) => DIGITS[c] || NATO[c] || "").filter(Boolean).join(" ");
+function callsign(ac) {
+  const m = /^[A-Z]{2,4}(\d\w*)$/.exec(ac.flight);
+  if (ac.airline && m) return ac.airline + " " + spell(m[1]);
+  const id = (ac.flight || ac.reg || "").replace(/[^A-Za-z0-9]/g, "");
+  return id ? spell(id.slice(-3)) : "unidentified traffic";
+}
+const KIND_SAY = { heli: "Chopper down the hoop.", quad: "Super jumbo, through the hoop.", wide: "Heavy, through the hoop.", light: "Trainer tagged.", lighttwin: "Twin, through the hoop." };
 
 // ---------------------------------------------------------------------------
 // Scene effects: hoops, sparks, shockwaves, pop-ups
@@ -382,6 +472,7 @@ function beginCharge(ac, e) {
     sfx.denied();
     const why = ac.hoop ? "ALREADY HOOPED" : G.hoops.length >= MAX_HOOPS ? "OUT OF HOOPS" : "ON THE GROUND";
     popup(ac.cur.pos, why, "miss", "#ffb199");
+    say("Negative. " + (ac.hoop ? "Already hooped." : G.hoops.length >= MAX_HOOPS ? "Out of hoops." : "Traffic is on the ground."), 0);
     return;
   }
   G.charge = { ac, t0: performance.now() };
@@ -447,14 +538,15 @@ function scoreHit(hoop) {
   if (bull) sfx.bullseye(G.streak);
   bump("gScore"); bump("gCombo");
 
-  if (called) { G.calls++; sfx.roger(); toast("ROGER THAT!", "that is " + G.call.def.text.toLowerCase() + " · triple points", "#7dff6b", true); clearCall(); }
-  else if (gold) { toast("GOLDEN CATCH!", ac.name, "#ffd23f", true); clearGold(); confetti(40); }
-  else if (bull) toast("BULLSEYE!", "", hoop.tier.css, true);
-  else if (hoop.lead > 80) toast("LONG BOMB!", Math.round(hoop.lead) + " seconds out", "#ffd23f");
-  else if (G.streak === 3) toast("HAT-TRICK!", "", "#7dff6b");
-  else if (G.streak === 6) toast("ON FIRE!", "", "#ff8c2b");
-  else if (G.streak === 9) toast("UNSTOPPABLE!", "", "#ff4fd8");
-  else if (KIND_SHOUT[ac.kind]) toast(KIND_SHOUT[ac.kind], "", hoop.tier.css);
+  if (called) { G.calls++; sfx.roger(); toast("ROGER THAT!", "that is " + G.call.def.text.toLowerCase() + " · triple points", "#7dff6b", true); say("Roger that, " + callsign(ac) + ". Triple points.", 2); clearCall(); }
+  else if (gold) { toast("GOLDEN CATCH!", ac.name, "#ffd23f", true); say("Golden catch! " + callsign(ac) + ", triple points.", 2); clearGold(); confetti(40); }
+  else if (bull) { toast("BULLSEYE!", "", hoop.tier.css, true); say("Bullseye! " + callsign(ac) + ", dead centre."); }
+  else if (hoop.lead > 80) { toast("LONG BOMB!", Math.round(hoop.lead) + " seconds out", "#ffd23f"); say("Long bomb! " + Math.round(hoop.lead) + " seconds out."); }
+  else if (G.streak === 3) { toast("HAT-TRICK!", "", "#7dff6b"); say("Hat-trick. Three in a row."); }
+  else if (G.streak === 6) { toast("ON FIRE!", "", "#ff8c2b"); say("Six in a row. You are on fire."); }
+  else if (G.streak === 9) { toast("UNSTOPPABLE!", "", "#ff4fd8"); say("Niner in a row. Unstoppable."); }
+  else if (KIND_SHOUT[ac.kind]) { toast(KIND_SHOUT[ac.kind], "", hoop.tier.css); say(KIND_SAY[ac.kind], 0); }
+  else say(callsign(ac) + ", through the hoop.", 0);
 
   if (gold && G.gold) clearGold();
   if (!fever && (G.feverMeter += bull ? 2 : 1) >= FEVER_HITS) startFever();
@@ -466,7 +558,8 @@ function scoreMiss(hoop, lost) {
   popup(hoop.pos, lost ? "LOST CONTACT" : close ? "SO CLOSE!" : "MISSED", "miss");
   shockwave(hoop.pos, hoop.group.rotation.y, [2.5, 0.4, 0.3], visRadius(hoop.pos), 0.5, -0.7);
   close ? sfx.near() : sfx.miss();
-  if (G.streak >= 3) toast("STREAK BROKEN", "", "#ff7a6a");
+  if (G.streak >= 3) { toast("STREAK BROKEN", "", "#ff7a6a"); say("Streak broken."); }
+  else say(lost ? callsign(hoop.ac) + ", radar contact lost." : close ? "So close. " + callsign(hoop.ac) + " going around." : callsign(hoop.ac) + ", missed approach.", 0);
   G.streak = 0;
   if (G.fever <= 0) G.feverMeter = Math.max(0, G.feverMeter - 1);
   removeHoop(hoop);
@@ -478,6 +571,7 @@ function startFever() {
   sky.bloom.strength += 0.5;
   sfx.fever();
   toast("FEVER!", "double points", "#ff4fd8", true);
+  say("Fever! All hoops double points.");
   confetti(60);
 }
 function endFever() {
@@ -502,6 +596,7 @@ function spawnCall() {
   $("gCall").classList.remove("hidden");
   bump("gCall");
   sfx.call();
+  say("Tower, all stations. Hoop " + def.text.toLowerCase() + ". Triple points.", 2);
 }
 
 function clearGold() {
@@ -518,6 +613,7 @@ function spawnGold() {
   ac.el.classList.add("gold");
   sfx.gold();
   toast("GOLDEN PLANE", ac.name + " · triple points", "#ffd23f");
+  say("Traffic alert. Golden plane, " + callsign(ac) + ". Triple points.");
 }
 
 // ---------------------------------------------------------------------------
@@ -598,12 +694,13 @@ hooks.frame = (dt, now) => {
     } else if ((G.goldIn -= dt) <= 0) spawnGold();
     if (G.call) {
       $("gCallBar").style.width = (G.call.left / CALL_SECONDS) * 100 + "%";
-      if ((G.call.left -= dt) <= 0) clearCall();
+      if ((G.call.left -= dt) <= 0) { clearCall(); say("Tower call cancelled.", 0); }
     } else if ((G.callIn -= dt) <= 0) spawnCall();
     updateCharge();
     updateHoops(dt, now);
     const sec = Math.ceil(G.timeLeft);
     if (sec <= 10 && sec < G.lastBeep && sec > 0) { G.lastBeep = sec; sfx.tick(); }
+    if ((sec === 60 || sec === 30 || sec === 10) && G.timeCall !== sec && G.total > sec) { G.timeCall = sec; say(sec === 60 ? "One minute remaining." : sec === 30 ? "Thirty seconds remaining." : "Ten seconds.", sec === 10 ? 2 : 1); }
     renderHud(dt);
     if (G.timeLeft <= 0) gameOver();
   }
@@ -628,6 +725,7 @@ function show(id, on) { $(id).classList.toggle("hidden", !on); }
 function toTitle() {
   clearField();
   musicStop();
+  hush();
   G.phase = "title";
   show("gTitle", true); show("gOver", false); show("gHud", false); show("gCount", false);
   state.speed = 6;
@@ -658,7 +756,7 @@ function startGame() {
   state.speed = GAME_SPEED;
   sky.setPlaying(true);
   Object.assign(G, {
-    phase: "count", score: 0, shown: 0, streak: 0, bestStreak: 0, feverMeter: 0, thrown: 0, hits: 0, bulls: 0, longest: 0, goldIn: 9, lastBeep: 99, callIn: 6, calls: 0,
+    phase: "count", score: 0, shown: 0, streak: 0, bestStreak: 0, feverMeter: 0, thrown: 0, hits: 0, bulls: 0, longest: 0, goldIn: 9, lastBeep: 99, timeCall: 0, callIn: 6, calls: 0,
     total: Math.min(ROUND_SECONDS, Math.max(20, (state.duration - state.t - LEAD_MAX) / GAME_SPEED)),
   });
   G.timeLeft = G.total;
@@ -668,6 +766,7 @@ function startGame() {
   controls.autoRotate = false;
   sky.flyHome();
 
+  say("All stations, Sky Hoops tower. Stand by.", 2);
   let n = 3;
   const tickDown = () => {
     if (G.phase !== "count") return;
@@ -679,6 +778,7 @@ function startGame() {
     if (n-- > 0) return setTimeout(tickDown, 750);
     G.phase = "play";
     musicStart();
+    say("Cleared for takeoff.", 2);
     setTimeout(() => show("gCount", false), 700);
   };
   tickDown();
@@ -696,7 +796,8 @@ function gameOver() {
   const best = bestScore(), isBest = G.score > best && G.score > 0;
   if (isBest) { try { localStorage.setItem("sky.hoops.best", String(G.score)); } catch {} }
   $("gFinal").textContent = G.score.toLocaleString("en-AU");
-  $("gRank").textContent = RANKS.filter(([min]) => G.score >= min).pop()[1];
+  const rank = RANKS.filter(([min]) => G.score >= min).pop()[1];
+  $("gRank").textContent = rank;
   show("gNewBest", isBest);
   const acc = G.thrown ? Math.round((G.hits / G.thrown) * 100) : 0;
   $("gStats").innerHTML = [
@@ -705,6 +806,7 @@ function gameOver() {
   ].map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
   show("gHud", false); show("gOver", true);
   sfx.fanfare();
+  say("Time. All stations, round complete. Final score, " + G.score + ". Rank, " + rank + "." + (isBest ? " New personal best." : "") + " Tower out.", 2);
   confetti(isBest ? 220 : 110);
 }
 
@@ -739,6 +841,7 @@ hooks.key = (e) => {
   const k = e.key.toLowerCase();
   if (k === " " || k === "enter") { e.preventDefault(); if (G.phase === "title" || G.phase === "over") startGame(); return true; }
   if (k === "m") { setMuted(!A.muted); return true; }
+  if (k === "v") { setVoice(!V.on); return true; }
   if (k === "escape") { if (G.phase === "play" || G.phase === "count") toTitle(); return true; }
   return ["1", "2", "3", "4", "5", "6", "arrowleft", "arrowright", "d"].includes(k); // Sky-view shortcuts that make no sense mid-game
 };
@@ -747,7 +850,10 @@ hooks.loaded = toTitle;
 $("gStart").addEventListener("click", startGame);
 $("gAgain").addEventListener("click", startGame);
 $("gMute").addEventListener("click", () => { initAudio(); setMuted(!A.muted); });
+$("gVoice").addEventListener("click", () => { initAudio(); setVoice(!V.on); });
 setMuted(A.muted);
+setVoice(V.on && !!V.synth);
+if (!V.synth) $("gVoice").classList.add("hidden");
 renderAmmo();
 if (state.aircraft.length) toTitle();
 
