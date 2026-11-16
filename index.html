@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sky Hoops — ADS-B ring game</title>
+<meta name="description" content="Throw hoops ahead of real Sydney air traffic. An arcade game built on recorded ADS-B flight tracks.">
+<link rel="stylesheet" href="sky.css">
+<link rel="stylesheet" href="game.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body class="game">
+  <div id="stage"></div>
+  <div id="labels"></div>
+  <div id="vignette"></div>
+
+  <header id="brand" class="glass">
+    <div class="brand-title">SKY HOOPS</div>
+    <div class="brand-sub">Real flights, your hoops · <a href="https://github.com/saubury/sky-hoops">source</a></div>
+    <div id="clock">--:--:--</div>
+    <div id="clockDate">&nbsp;</div>
+    <div id="counts"><b id="countAir">0</b> airborne <span class="sep">·</span> <b id="countAll">0</b> tracked</div>
+    <select id="windowSelect" title="Replay a different chunk of data"></select>
+  </header>
+
+  <aside id="flights" class="glass">
+    <div class="panel-title">Flights in range</div>
+    <div id="flightList"></div>
+  </aside>
+
+  <nav id="modes" class="glass">
+    <button data-mode="free" class="active" title="Free orbit (1)"><kbd>1</kbd>Overview</button>
+    <button data-mode="chase" title="Fly behind (2)"><kbd>2</kbd>Chase</button>
+    <button data-mode="wing" title="Fly alongside (3)"><kbd>3</kbd>Wingman</button>
+    <button data-mode="orbit" title="Circle the aircraft (4)"><kbd>4</kbd>Orbit</button>
+    <button data-mode="cockpit" title="Pilot's view (5)"><kbd>5</kbd>Cockpit</button>
+    <button data-mode="tower" title="Watch from Sydney tower (6)"><kbd>6</kbd>Tower</button>
+    <span class="divider"></span>
+    <button id="directorBtn" title="Auto-director: tours the busiest flights (D)"><kbd>D</kbd>Director</button>
+  </nav>
+
+  <section id="card" class="glass hidden">
+    <button id="cardClose" title="Deselect (Esc)">×</button>
+    <div class="card-head">
+      <span id="cardFin"></span>
+      <div>
+        <div id="cardFlight">—</div>
+        <div id="cardAirline">&nbsp;</div>
+      </div>
+    </div>
+    <div id="cardDesc"></div>
+    <div class="card-meta"><span id="cardType"></span><span id="cardReg"></span><span id="cardHex"></span><span id="cardSquawk"></span></div>
+    <div class="gauges">
+      <div><label>Altitude</label><b id="gAlt">—</b></div>
+      <div><label>Ground speed</label><b id="gGs">—</b></div>
+      <div><label>Heading</label><b id="gHdg">—</b></div>
+      <div><label>Vertical</label><b id="gVs">—</b></div>
+    </div>
+    <canvas id="profile" width="560" height="120"></canvas>
+    <div class="card-nav"><button id="prevFlight" title="Previous flight (←)">◀ prev</button><button id="nextFlight" title="Next flight (→)">next ▶</button></div>
+  </section>
+
+  <footer id="transport" class="glass">
+    <button id="playBtn" title="Play / pause (Space)">❚❚</button>
+    <div id="timeline">
+      <canvas id="histogram"></canvas>
+      <div id="playhead"></div>
+      <div id="tStart" class="t-label"></div>
+      <div id="tEnd" class="t-label"></div>
+    </div>
+    <div id="speeds">
+      <button data-speed="1">1×</button>
+      <button data-speed="5">5×</button>
+      <button data-speed="10" class="active">10×</button>
+      <button data-speed="30">30×</button>
+      <button data-speed="60">60×</button>
+    </div>
+    <div id="toggles">
+      <button id="labelsBtn" class="active" title="Callsign labels (L)">Labels</button>
+      <button id="groundBtn" title="Show parked / taxiing aircraft (G)">Ground</button>
+      <button id="dayBtn" title="Daylight / night (N)">Day</button>
+    </div>
+  </footer>
+
+  <div id="credit">Imagery © Esri, Maxar, Earthstar Geographics · Positions adsb.fi</div>
+  <div id="hint">drag to look · scroll to zoom · click a plane to fly with it</div>
+
+
+  <!-- ===== Game HUD ===== -->
+  <div id="gHud" class="hidden">
+    <div id="gScoreBox" class="glass">
+      <div class="g-label">Score</div>
+      <div id="gScore">0</div>
+      <div id="gBest">best 0</div>
+    </div>
+    <div id="gCall" class="glass hidden">
+      <span class="g-label">Tower call · ×3</span>
+      <div id="gCallText"></div>
+      <div class="bar"><i id="gCallBar"></i></div>
+    </div>
+    <div id="gTimerBox" class="glass">
+      <svg viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="44"/><circle id="gTimerArc" cx="50" cy="50" r="44"/></svg>
+      <div id="gTimer">120</div>
+    </div>
+    <div id="gComboBox" class="glass">
+      <div class="g-label">Streak</div>
+      <div id="gCombo">×1</div>
+      <div id="gFeverBar"><i></i></div>
+      <div id="gAmmo"></div>
+    </div>
+  </div>
+  <div id="gToast"></div>
+  <div id="gCharge" class="hidden"><b></b><span></span><div class="bar"><i></i></div></div>
+  <div id="gFlash"></div>
+  <div id="gConfetti"></div>
+  <button id="gMute" class="glass" title="Sound on/off (M)">♪ on</button>
+
+  <div id="gTitle" class="g-overlay hidden">
+    <div class="g-card glass">
+      <div class="g-logo"><span>SKY</span><span>HOOPS</span></div>
+      <div class="g-tag">Real Sydney air traffic. Imaginary hoops. Questionable air-traffic control.</div>
+      <ol class="g-how">
+        <li><b>Press and hold</b> on a plane (or its label) to wind up a hoop.</li>
+        <li>The longer you hold, the <b>further ahead</b> it lands — and the more it is worth.</li>
+        <li><b>Release</b> to throw. If the real flight goes through it, you score. If the pilot turns… you don't.</li>
+        <li>Chain hits for a <b>streak multiplier</b>, fill the bar for <b>FEVER</b>, and chase the <b>golden plane</b> for ×3.</li>
+        <li>Answer <b>tower calls</b> — "hoop a wide-body", "hoop an overseas airline" — for ×3. The labels only give you a callsign and a type code, so know your fleet.</li>
+      </ol>
+      <div class="g-pts"><span class="t1">15 s ahead · 100</span><span class="t2">45 s · 600</span><span class="t3">100 s · 2,000+</span></div>
+      <button id="gStart" class="g-go">START <kbd>Space</kbd></button>
+      <div class="g-foot">Drag to look around · scroll to zoom · <kbd>M</kbd> sound · <kbd>N</kbd> day / night</div>
+    </div>
+  </div>
+
+  <div id="gCount" class="g-overlay hidden"><div id="gCountNum">3</div></div>
+
+  <div id="gOver" class="g-overlay hidden">
+    <div class="g-card glass">
+      <div class="g-over-title">TIME!</div>
+      <div id="gRank"></div>
+      <div id="gFinal">0</div>
+      <div id="gNewBest" class="hidden">★ NEW BEST ★</div>
+      <div class="g-stats" id="gStats"></div>
+      <button id="gAgain" class="g-go">PLAY AGAIN <kbd>Space</kbd></button>
+    </div>
+  </div>
+
+  <div id="loading">
+    <div class="loader-ring"></div>
+    <div id="loadingText">Finding the busiest stretch of sky…</div>
+    <pre id="loadingDetail"></pre>
+  </div>
+
+<script type="module" src="game.js"></script>
+</body>
+</html>
