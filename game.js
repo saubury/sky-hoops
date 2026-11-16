@@ -7,7 +7,7 @@
 // goes through. Longer predictions are worth far more and miss far more often
 // (measured on real data: ~85% hit at 15 s, ~50% at 45 s, ~20% at 100 s).
 
-import { sky } from "./sky.js?v=2";
+import { sky } from "./sky.js?v=3";
 
 const { THREE, CSS2DObject, scene, camera, renderer, controls, state, hooks, KT, FT, VEX } = sky;
 const $ = (id) => document.getElementById(id);
@@ -72,7 +72,7 @@ try { A.muted = localStorage.getItem("sky.hoops.muted") === "1"; } catch {}
 const midi = (n) => 440 * 2 ** ((n - 69) / 12);
 
 function initAudio() {
-  if (A.ctx) { A.ctx.resume(); return; }
+  if (A.ctx) { if (A.ctx.state !== "running") A.ctx.resume(); return; }
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
   const ctx = (A.ctx = new Ctx());
@@ -90,6 +90,35 @@ function initAudio() {
   const d = buf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
 }
+
+// iOS Safari has two extra hurdles. The audio context only starts from inside
+// a touchend/click handler, and WebAudio on its own is treated as "ambient"
+// sound, which the ring/silent switch mutes. Declaring a playback session (or,
+// on older iOS, keeping a silent <audio> element playing) makes it behave like
+// a game or music app instead.
+let silentEl = null;
+function unlockAudio() {
+  initAudio();
+  if (!A.ctx) return;
+  if (A.ctx.state !== "running") A.ctx.resume();
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = "playback";
+    else if (!silentEl && /iPhone|iPad|iPod/.test(navigator.userAgent)) {
+      // 0.25 s of silence as a WAV: 44-byte header + zeroed 8-bit samples.
+      const n = 2000, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
+      b.set([82, 73, 70, 70], 0); v.setUint32(4, 36 + n, true); b.set([87, 65, 86, 69, 102, 109, 116, 32], 8);
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true);
+      v.setUint16(32, 1, true); v.setUint16(34, 8, true); b.set([100, 97, 116, 97], 36); v.setUint32(40, n, true); b.fill(128, 44);
+      silentEl = new Audio(URL.createObjectURL(new Blob([b], { type: "audio/wav" })));
+      silentEl.loop = true; silentEl.setAttribute("playsinline", "");
+    }
+    if (silentEl && silentEl.paused) silentEl.play().catch(() => {});
+  } catch {}
+  // First sound from inside the gesture: some iOS versions only truly start the context once something plays.
+  if (!A.kicked) { A.kicked = true; const o = A.ctx.createOscillator(), g = A.ctx.createGain(); g.gain.value = 0.0001; o.connect(g); g.connect(A.ctx.destination); o.start(); o.stop(A.ctx.currentTime + 0.05); }
+}
+["touchend", "click", "keydown"].forEach((ev) => window.addEventListener(ev, unlockAudio, { capture: true, passive: true }));
+document.addEventListener("visibilitychange", () => { if (!document.hidden && A.ctx && A.ctx.state !== "running") A.ctx.resume(); });
 
 function tone(f, { at = 0, dur = 0.2, type = "sine", g = 0.2, to = null, dest = A.sfx, echo = false, attack = 0.005 } = {}) {
   if (!A.ctx) return;
