@@ -4,7 +4,7 @@ An arcade game played over real air traffic. Recorded ADS-B flight tracks
 around Sydney Airport replay in 3D; you throw hoops ahead of the aircraft and
 score when the real flight goes through them.
 
-**Play it: https://saubury.github.io/sky-hoops/**
+**Play it: https://simonaubury.com/sky-hoops/**
 
 ## How to play
 
