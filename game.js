@@ -7,7 +7,7 @@
 // goes through. Longer predictions are worth far more and miss far more often
 // (measured on real data: ~85% hit at 15 s, ~50% at 45 s, ~20% at 100 s).
 
-import { sky } from "./sky.js";
+import { sky } from "./sky.js?v=2";
 
 const { THREE, CSS2DObject, scene, camera, renderer, controls, state, hooks, KT, FT, VEX } = sky;
 const $ = (id) => document.getElementById(id);
@@ -560,6 +560,7 @@ function renderHud(dt) {
 }
 
 hooks.frame = (dt, now) => {
+  if (document.body.dataset.phase !== G.phase) document.body.dataset.phase = G.phase; // lets the stylesheet lay out per phase
   if (G.phase === "play") {
     G.timeLeft -= dt;
     if (G.fever > 0 && (G.fever -= dt) <= 0) endFever();
@@ -701,6 +702,8 @@ window.addEventListener("pointermove", (e) => { G.pointer.x = e.clientX; G.point
 window.addEventListener("pointerup", () => endCharge(true));
 window.addEventListener("pointercancel", () => endCharge(false));
 window.addEventListener("blur", () => endCharge(false));
+// A long press on a phone would otherwise open the context menu / text callout mid-throw.
+window.addEventListener("contextmenu", (e) => { if (e.target.tagName !== "SELECT") e.preventDefault(); });
 
 hooks.pick = () => true; // clicking an aircraft never opens the Sky view's flight card here
 hooks.key = (e) => {

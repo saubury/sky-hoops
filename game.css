@@ -145,3 +145,94 @@ body.fever #vignette { background: radial-gradient(ellipse at center, transparen
 #gCall .bar i { display: block; height: 100%; background: var(--lime); }
 #gCall.bump { animation: callIn 0.45s cubic-bezier(.2, 1.8, .4, 1); }
 @keyframes callIn { 0% { transform: translateX(-50%) scale(0.4); opacity: 0; } 100% { transform: translateX(-50%) scale(1); opacity: 1; } }
+
+/* ---------------------------------------------------------------------------
+   Touch and small screens
+   --------------------------------------------------------------------------- */
+body.game { -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; touch-action: none; overscroll-behavior: none; }
+body.game .tag { touch-action: none; }
+body.game #brand { z-index: 45; } /* stays usable above the title screen so the sample can be switched */
+.g-overlay { touch-action: pan-y; }
+.g-go, #gMute { touch-action: manipulation; }
+
+@media (pointer: coarse) {
+  .g-go kbd, .g-foot .keys { display: none; }
+  body.game .tag { padding: 5px 9px 6px; font-size: 12px; }
+  #gCharge { transform: translate(-50%, -128px); } /* clear of the thumb */
+}
+
+/* Phones (portrait or landscape) and other small windows */
+@media (max-width: 760px), (max-height: 520px) {
+  body.game #brand {
+    top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); right: calc(8px + env(safe-area-inset-right)); width: auto;
+    padding: 8px 12px; display: flex; align-items: center; gap: 10px;
+  }
+  body.game #brand #clock, body.game #brand #clockDate, body.game #brand #counts, body.game #brand .brand-sub { display: none; }
+  body.game #brand .brand-title { white-space: nowrap; }
+  body.game #windowSelect { margin-top: 0; flex: 1; min-width: 0; font-size: 16px; } /* 16px stops iOS zooming on focus */
+  body.game[data-phase="play"] #brand, body.game[data-phase="count"] #brand { display: none !important; }
+  body.game #credit { right: 8px; bottom: calc(6px + env(safe-area-inset-bottom)); font-size: 8px; max-width: 60vw; text-align: right; }
+  #gMute { left: calc(8px + env(safe-area-inset-left)); bottom: calc(8px + env(safe-area-inset-bottom)); }
+
+  /* Title / results: scroll if needed, and the button comes before the instructions */
+  .g-overlay { overflow-y: auto; -webkit-overflow-scrolling: touch; place-items: start center;
+    padding: calc(70px + env(safe-area-inset-top)) 0 calc(56px + env(safe-area-inset-bottom)); }
+  #gCount { padding: 0; place-items: center; overflow: hidden; }
+  #gCountNum { font-size: 130px; }
+  .g-card { display: flex; flex-direction: column; align-items: center; width: min(620px, 94vw); padding: 18px 18px 16px; border-radius: 18px; }
+  .g-logo { font-size: 46px; }
+  .g-logo span { margin: 0 4px; }
+  .g-tag { font-size: 12px; margin-top: 8px; }
+  .g-go { order: 1; font-size: 19px; padding: 13px 44px; margin: 16px 0 6px; }
+  .g-how { order: 2; font-size: 13px; line-height: 1.5; margin: 12px 0 10px; align-self: stretch; }
+  .g-pts { order: 3; flex-wrap: wrap; margin-bottom: 8px; }
+  .g-foot { order: 4; margin-top: 6px; }
+  #gOver .g-go { order: 5; }
+  #gFinal { font-size: 58px; }
+  #gRank { font-size: 22px; }
+  .g-stats { align-self: stretch; gap: 6px; margin: 12px 0 8px; }
+  .g-stats b { font-size: 16px; }
+  .g-stats span { font-size: 9px; letter-spacing: 0.08em; }
+
+  #gToast div { font-size: 30px; -webkit-text-stroke: 1px rgba(0, 0, 0, 0.35); }
+  #gToast div small { font-size: 12px; letter-spacing: 0.12em; }
+  .pop { font-size: 20px; }
+  .pop.big { font-size: 28px; }
+}
+
+/* Portrait phones: HUD across the top edge */
+@media (max-width: 760px) {
+  #gScoreBox { top: calc(8px + env(safe-area-inset-top)); left: 8px; transform: none; min-width: 0; padding: 6px 14px 7px; text-align: left; }
+  #gScore { font-size: 32px; }
+  #gBest { font-size: 10px; margin-top: 2px; }
+  #gTimerBox { top: calc(8px + env(safe-area-inset-top)); left: auto; right: 8px; width: 64px; height: 64px; }
+  #gTimerBox svg { inset: 4px; }
+  #gTimer { font-size: 20px; }
+  #gComboBox { top: calc(8px + env(safe-area-inset-top)); right: 80px; width: auto; padding: 6px 10px 8px; }
+  #gCombo { font-size: 19px; white-space: nowrap; }
+  #gFeverBar { width: 92px; height: 6px; margin-top: 3px; }
+  #gAmmo { margin-top: 7px; gap: 6px; }
+  #gAmmo span { width: 17px; height: 17px; border-width: 3px; }
+  #gCall { top: calc(84px + env(safe-area-inset-top)); left: 8px; right: 8px; transform: none; min-width: 0; padding: 6px 12px 8px; }
+  #gCallText { font-size: 15px; white-space: normal; }
+  #gCall.bump { animation: callInFlat 0.45s cubic-bezier(.2, 1.8, .4, 1); }
+  #gToast { top: calc(160px + env(safe-area-inset-top)); }
+}
+@keyframes callInFlat { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+
+/* Landscape phones: keep the desktop arrangement, just tighter */
+@media (max-height: 520px) and (min-width: 761px) {
+  #gScoreBox { top: 8px; padding: 4px 26px 6px; min-width: 200px; }
+  #gScore { font-size: 36px; }
+  #gTimerBox { top: 8px; left: calc(50% + 124px); right: auto; width: 62px; height: 62px; }
+  #gTimerBox svg { inset: 4px; }
+  #gTimer { font-size: 20px; }
+  #gComboBox { top: 8px; right: calc(8px + env(safe-area-inset-right)); width: 170px; padding: 6px 12px 8px; }
+  #gCombo { font-size: 22px; }
+  #gAmmo { margin-top: 6px; }
+  #gAmmo span { width: 18px; height: 18px; border-width: 3px; }
+  #gCall { top: 84px; padding: 4px 18px 7px; }
+  #gCallText { font-size: 15px; }
+  #gToast { top: 158px; }
+  .g-overlay { padding-top: calc(56px + env(safe-area-inset-top)); }
+}

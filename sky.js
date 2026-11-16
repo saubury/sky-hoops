@@ -31,6 +31,8 @@ const TRAIL_SECONDS = 300;
 const MIN_PLANE_SCALE = 3;
 const HOME_POS = new THREE.Vector3(-20000, 24000, 46000);
 const HOME_TARGET = new THREE.Vector3(0, 1500, -2000);
+// A portrait phone sees a much narrower slice of the scene, so start further back.
+if (window.innerWidth < window.innerHeight) HOME_POS.sub(HOME_TARGET).multiplyScalar(1.75).add(HOME_TARGET);
 
 // YSSY runway thresholds (same as the 2D/3D radar view).
 const RUNWAYS = [
