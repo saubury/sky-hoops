@@ -23,6 +23,9 @@ score when the real flight goes through them.
 - The tower reads its calls out loud, along with golden planes, streaks,
   time checks and your final score, using your browser's built-in speech
   voice (Australian if your device has one).
+- **Pixel-art mode** (the 8-bit button, or `P`) redraws the whole thing as
+  chunky pixels: a flat-colour map, big outlined cartoon aircraft, solid
+  trails and a blocky HUD.
 - A round is two minutes. Drag to look around, scroll to zoom.
 
 | Key | Action |
@@ -30,6 +33,7 @@ score when the real flight goes through them.
 | `Space` | Start / play again |
 | `M` | Sound on / off |
 | `V` | Tower voice on / off |
+| `P` | Pixel-art mode on / off |
 | `N` | Day / night |
 | `L` | Aircraft labels |
 | `Esc` | Back to the title |

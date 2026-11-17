@@ -13,8 +13,9 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
-import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 
 const REF = [-33.9401302, 151.175371]; // feed centre (YSSY)
 const TOWER = [-33.9437, 151.1808];
@@ -115,6 +116,27 @@ const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.85, 0.7, 0.82);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
+// Pixel-art mode. The scene is rendered at a fraction of the window size and
+// scaled back up with hard edges, and this last pass snaps every colour to a
+// small palette (six levels per channel, no dithering, so flat areas stay
+// flat). The world is also restyled for it: see setPixel().
+const pixelPass = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, uLevels: { value: 6 } },
+  vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uLevels; varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      gl_FragColor = vec4(floor(clamp(c.rgb, 0.0, 1.0) * (uLevels - 1.0) + 0.5) / (uLevels - 1.0), 1.0);
+    }`,
+});
+pixelPass.enabled = false;
+composer.addPass(pixelPass);
+let pixelSize = 0;          // screen pixels per art pixel; 0 = pixel mode off
+const PIXEL_PLANE = 3;      // aircraft are drawn this much bigger in pixel mode, or they are only a few art pixels across
+const uHard = { value: 0 };     // trails: 1 = solid colour with a dotted tail instead of a soft glow
+const uOutline = { value: 0 };  // outline thickness as a fraction of distance (one art pixel)
+
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.07;
@@ -145,6 +167,59 @@ const uCurtain = { value: 1 }; // dimmed for the tower's long lens, where a curt
 let skyMat, stars, groundBase;
 const GROUND_TINT = new THREE.Color();
 const tileMats = [];
+const tiles = []; // { mesh, mat, z, flat } — flat is the pixel-mode version of the tile
+
+// Pixel mode swaps the satellite photo for a flat map made from it: each tile
+// is shrunk to a few dozen cells and every cell is sorted by colour into
+// water, bush, open country or built-up, then painted in one flat colour.
+const FLAT = {
+  day:   { water: [51, 102, 204], bush: [51, 153, 51], open: [102, 204, 102], town: [153, 153, 153] },
+  night: { water: [0, 51, 102],   bush: [0, 51, 0],    open: [0, 102, 51],    town: [51, 51, 102] },
+};
+function flatTile(img, n) {
+  const c = document.createElement("canvas");
+  c.width = c.height = n;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, 0, 0, n, n);
+  let src;
+  try { src = g.getImageData(0, 0, n, n).data; } catch { return null; } // no pixel access: keep the photo
+  const kinds = [];
+  for (let i = 0; i < n * n; i++) {
+    const r = src[i * 4], gr = src[i * 4 + 1], b = src[i * 4 + 2];
+    kinds.push(b > r + 10 && b > gr - 8 ? "water" : gr > r + 4 && gr > b + 6 ? "bush" : Math.max(r, gr, b) - Math.min(r, gr, b) > 34 ? "open" : "town");
+  }
+  // Each cell takes the commonest kind among itself and its neighbours, which clears the speckle.
+  const smooth = kinds.map((own, i) => {
+    const x = i % n, y = (i - x) / n, votes = {};
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const k = kinds[clamp(y + dy, 0, n - 1) * n + clamp(x + dx, 0, n - 1)];
+      votes[k] = (votes[k] || 0) + 1;
+    }
+    return Object.keys(votes).reduce((best, k) => (votes[k] > votes[best] ? k : best), own);
+  });
+  const out = {};
+  for (const theme of ["day", "night"]) {
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = n;
+    const ctx = cv.getContext("2d"), im = ctx.createImageData(n, n);
+    smooth.forEach((k, i) => im.data.set([...FLAT[theme][k], 255], i * 4));
+    ctx.putImageData(im, 0, 0);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    out[theme] = tex;
+  }
+  out.mat = new THREE.MeshBasicMaterial({ map: out.day, depthTest: false, depthWrite: false, fog: false });
+  return out;
+}
+function applyTile(t) {
+  const flat = pixelSize && t.flat;
+  if (flat) t.flat.mat.map = state.day ? t.flat.day : t.flat.night;
+  t.mesh.material = flat ? t.flat.mat : t.mat;
+  t.mesh.visible = !(pixelSize && t.z === 13); // the finest ring is far below one art pixel per cell
+}
 
 function buildSky() {
   const sky = new THREE.Mesh(
@@ -223,6 +298,9 @@ function buildGround() {
           mesh.renderOrder = order;
           mesh.frustumCulled = false;
           scene.add(mesh);
+          const t = { mesh, mat, z, flat: z === 13 ? null : flatTile(tex.image, z === 8 ? 64 : 32) };
+          tiles.push(t);
+          applyTile(t);
         }, undefined, () => {});
       }
     }
@@ -339,6 +417,8 @@ function fixedWing(o) {
   const ff = -(L / 2) + finH * 0.2;
   const fin = finGeometry([[ff, R * 0.7], [ff - finH * 0.75, finH], [ff - finH * 1.1, finH], [ff - finH * 0.95, R * 0.7]], Math.max(0.12, R * 0.2));
   const model = finishModel(parts, fin, { boost, lights: [half, wingY, -(wingF - sweep - tip / 2)], tailZ: L / 2 + tc, lightR: Math.max(half * 0.036, 0.13) });
+  // Windscreen (only drawn on the cartoon version).
+  model.glass = new THREE.SphereGeometry(R * 0.78, 10, 8).scale(1, 0.75, 1.25).translate(0, R * 0.42, -(L / 2 + R * nose * 0.3));
   model.props = props.flatMap((p) => (p.x ? [-1, 1] : [0]).map((sx) => ({ pos: [sx * p.x, p.y, -p.f], r: p.r })));
   model.top = Math.max(model.top, finH);
   return model;
@@ -367,26 +447,55 @@ function groundVehicle() {
   return finishModel([box, cab], beacon, { boost: 2.2, lights: null, tailZ: 0, lightR: 0.3, belly: 0, forceTail: "#ffb000" });
 }
 
-const MODELS = {
-  narrow: fixedWing({ L: 28, R: 1.95, half: 17.5, chord: 8.7, tip: 2.1, sweep: 10, wingF: 5.5, wingY: -1.1, finH: 9.2, stabHalf: 6.4,
-    engines: [{ x: 5.8, y: -2.3, f: 2.2, r: 1.15, l: 4.6 }] }),
-  wide: fixedWing({ L: 44, R: 2.9, half: 28, chord: 13, tip: 3, sweep: 17, wingF: 9, wingY: -1.6, finH: 13, stabHalf: 10,
-    engines: [{ x: 9.5, y: -3.7, f: 4.5, r: 1.95, l: 7 }] }),
-  quad: fixedWing({ L: 48, R: 3.5, half: 33, chord: 16, tip: 3.5, sweep: 20, wingF: 11, wingY: -2, finH: 15, stabHalf: 12,
-    engines: [{ x: 9.5, y: -4.3, f: 6, r: 1.8, l: 6.5 }, { x: 19.5, y: -3.6, f: -1.5, r: 1.8, l: 6.5 }] }),
-  bizjet: fixedWing({ L: 15, R: 1.25, half: 9.5, chord: 4.5, tip: 1.3, sweep: 4.5, wingF: 1, wingY: -0.8, finH: 5, stabHalf: 3.6, tTail: true, boost: 1.25,
-    engines: [{ x: 2.2, y: 0.9, f: -6.5, r: 0.75, l: 3.4 }] }),
-  turboprop: fixedWing({ L: 22, R: 1.5, half: 14, chord: 3.6, tip: 1.8, sweep: 0.6, wingF: 2.5, wingY: 1.4, finH: 6.5, stabHalf: 4.6, tTail: true, boost: 1.15,
-    engines: [{ x: 4.6, y: 0.9, f: 1.5, r: 0.8, l: 5 }], props: [{ x: 4.6, y: 0.9, f: 4.3, r: 2.3 }] }),
-  turbosingle: fixedWing({ L: 6.5, R: 0.9, half: 8.2, chord: 2.3, tip: 1.6, sweep: 0.2, wingF: 1.8, wingY: 0.85, finH: 3.3, stabHalf: 3, gear: true, nose: 1.8, tcK: 0.75, boost: 1.6,
-    props: [{ x: 0, y: 0, f: 4.9, r: 1.4 }] }),
-  light: fixedWing({ L: 3.4, R: 0.62, half: 5.5, chord: 1.6, tip: 1.45, sweep: 0, wingF: 1.3, wingY: 0.62, finH: 2.1, stabHalf: 1.8, gear: true, nose: 1.5, tcK: 1.05, boost: 1.9,
-    props: [{ x: 0, y: 0, f: 2.68, r: 0.95 }] }),
-  lighttwin: fixedWing({ L: 4.4, R: 0.68, half: 6, chord: 1.9, tip: 1.3, sweep: 0.25, wingF: 1.5, wingY: -0.5, finH: 2.5, stabHalf: 2.2, gear: true, nose: 2.2, tcK: 0.85, boost: 1.8,
-    engines: [{ x: 1.9, y: -0.3, f: 1.0, r: 0.4, l: 2.2 }], props: [{ x: 1.9, y: -0.3, f: 2.2, r: 0.95 }] }),
-  heli: helicopter(),
-  vehicle: groundVehicle(),
+const SPECS = {
+  narrow: { L: 28, R: 1.95, half: 17.5, chord: 8.7, tip: 2.1, sweep: 10, wingF: 5.5, wingY: -1.1, finH: 9.2, stabHalf: 6.4,
+    engines: [{ x: 5.8, y: -2.3, f: 2.2, r: 1.15, l: 4.6 }] },
+  wide: { L: 44, R: 2.9, half: 28, chord: 13, tip: 3, sweep: 17, wingF: 9, wingY: -1.6, finH: 13, stabHalf: 10,
+    engines: [{ x: 9.5, y: -3.7, f: 4.5, r: 1.95, l: 7 }] },
+  quad: { L: 48, R: 3.5, half: 33, chord: 16, tip: 3.5, sweep: 20, wingF: 11, wingY: -2, finH: 15, stabHalf: 12,
+    engines: [{ x: 9.5, y: -4.3, f: 6, r: 1.8, l: 6.5 }, { x: 19.5, y: -3.6, f: -1.5, r: 1.8, l: 6.5 }] },
+  bizjet: { L: 15, R: 1.25, half: 9.5, chord: 4.5, tip: 1.3, sweep: 4.5, wingF: 1, wingY: -0.8, finH: 5, stabHalf: 3.6, tTail: true, boost: 1.25,
+    engines: [{ x: 2.2, y: 0.9, f: -6.5, r: 0.75, l: 3.4 }] },
+  turboprop: { L: 22, R: 1.5, half: 14, chord: 3.6, tip: 1.8, sweep: 0.6, wingF: 2.5, wingY: 1.4, finH: 6.5, stabHalf: 4.6, tTail: true, boost: 1.15,
+    engines: [{ x: 4.6, y: 0.9, f: 1.5, r: 0.8, l: 5 }], props: [{ x: 4.6, y: 0.9, f: 4.3, r: 2.3 }] },
+  turbosingle: { L: 6.5, R: 0.9, half: 8.2, chord: 2.3, tip: 1.6, sweep: 0.2, wingF: 1.8, wingY: 0.85, finH: 3.3, stabHalf: 3, gear: true, nose: 1.8, tcK: 0.75, boost: 1.6,
+    props: [{ x: 0, y: 0, f: 4.9, r: 1.4 }] },
+  light: { L: 3.4, R: 0.62, half: 5.5, chord: 1.6, tip: 1.45, sweep: 0, wingF: 1.3, wingY: 0.62, finH: 2.1, stabHalf: 1.8, gear: true, nose: 1.5, tcK: 1.05, boost: 1.9,
+    props: [{ x: 0, y: 0, f: 2.68, r: 0.95 }] },
+  lighttwin: { L: 4.4, R: 0.68, half: 6, chord: 1.9, tip: 1.3, sweep: 0.25, wingF: 1.5, wingY: -0.5, finH: 2.5, stabHalf: 2.2, gear: true, nose: 2.2, tcK: 0.85, boost: 1.8,
+    engines: [{ x: 1.9, y: -0.3, f: 1.0, r: 0.4, l: 2.2 }], props: [{ x: 1.9, y: -0.3, f: 2.2, r: 0.95 }] },
 };
+
+
+// The cartoon version of a fixed-wing model for pixel mode: a fat, short
+// fuselage, stubby broad wings, an oversized tail and big engines, so the
+// shape still reads when the whole aircraft is a dozen art pixels across.
+function chubby(o) {
+  const k = 1.55, R = o.R * k, L = o.L * 0.9, nose = Math.min(o.nose ?? 2.4, 1.6);
+  const engines = (o.engines || []).map((e) => ({ ...e, r: e.r * 1.6, l: e.l * 1.1, y: e.y * k, x: Math.max(e.x, R + e.r * 1.1) }));
+  const props = (o.props || []).map((p, i) => p.x
+    ? { ...p, x: engines[i].x, y: p.y * k, f: engines[i].f + engines[i].l / 2 + 0.15, r: p.r * 1.25 }
+    : { ...p, f: L / 2 + R * nose + 0.1, r: p.r * 1.3 });
+  return { ...o, R, L, nose, engines, props, wingY: o.wingY * k, wingF: o.wingF + o.chord * 0.05, chord: o.chord * 1.1,
+    tip: Math.max(o.tip * 1.8, o.chord * 0.5), sweep: o.sweep * 0.8, finH: o.finH * 1.35, stabHalf: o.stabHalf * 1.3 };
+}
+
+// One smooth-normalled shell of the whole model. Drawn inside-out and pushed
+// outward by an art pixel, it shows as a dark outline around the aircraft.
+function hullOf(m) {
+  const bare = (g) => { g = g.index ? g.toNonIndexed() : g.clone(); g.deleteAttribute("normal"); g.deleteAttribute("uv"); return g; };
+  const g = mergeVertices(mergeGeometries([bare(m.body), bare(m.fin)]), 1e-3);
+  g.computeVertexNormals();
+  return g;
+}
+
+const MODELS = { heli: helicopter(), vehicle: groundVehicle() };
+MODELS.heli.glass = new THREE.SphereGeometry(0.95, 10, 8).scale(1, 0.85, 1.1).translate(0, 0.2, -1.55);
+for (const [kind, spec] of Object.entries(SPECS)) MODELS[kind] = fixedWing(spec);
+for (const [kind, m] of Object.entries(MODELS)) {
+  m.px = SPECS[kind] ? fixedWing(chubby(SPECS[kind])) : m;
+  m.px.hull = hullOf(m.px);
+}
 
 const KIND_LABEL = {
   narrow: "Narrow-body jet", wide: "Wide-body jet", quad: "Four-engine heavy", bizjet: "Business jet", turboprop: "Turboprop",
@@ -440,10 +549,39 @@ const STROBE_MAT = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB
 const HIT_GEO = new THREE.SphereGeometry(0.8, 8, 6);
 const HIT_MAT = new THREE.MeshBasicMaterial({ visible: false });
 const SHADOW_GEO = new THREE.RingGeometry(0.37, 0.53, 32).rotateX(-Math.PI / 2);
+const SHADOW_BLOB = new THREE.CircleGeometry(0.4, 20).rotateX(-Math.PI / 2); // pixel mode: a plain dark blob, so it can't be mistaken for a hoop
 const DISC_GEO = new THREE.CircleGeometry(1, 24);
 const BLADE_GEO = new THREE.BoxGeometry(2, 0.14, 0.03);
 const DISC_MAT = new THREE.MeshBasicMaterial({ color: 0xcfe6ff, transparent: true, opacity: 0.13, side: THREE.DoubleSide, depthWrite: false });
 const BLADE_MAT = new THREE.MeshBasicMaterial({ color: 0x1c232b });
+
+// Cartoon look for pixel mode: three flat tones picked by how squarely a
+// surface faces the sun, and no reflections or glow.
+function toonMat(color) {
+  return new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(color) } },
+    vertexShader: "varying vec3 vN; void main() { vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+    fragmentShader: `
+      uniform vec3 uColor; varying vec3 vN;
+      void main() {
+        float d = dot(normalize(vN), normalize(vec3(-0.5, 1.0, 0.6)));
+        gl_FragColor = vec4(uColor * (d > 0.3 ? 1.0 : d > -0.25 ? 0.8 : 0.6), 1.0);
+      }`,
+  });
+}
+const TOON_BODY = toonMat(0xffffff), TOON_VEHICLE = toonMat(0xffcc33);
+const GLASS_MAT = new THREE.MeshBasicMaterial({ color: 0x1b3a6b });
+const OUTLINE_MAT = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, uniforms: { uOutline }, // drawn before the airframes (see renderOrder), which then paint over all but the rim
+  vertexShader: `
+    uniform float uOutline;
+    void main() {
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      mv.xyz += normalize(normalMatrix * normal) * -mv.z * uOutline;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: "void main() { gl_FragColor = vec4(0.02, 0.03, 0.08, 1.0); }",
+});
 
 // A propeller or rotor: a faint blur disc plus blades, spun every frame about its local Z.
 function makeSpinner({ pos, r, axis = "z" }, blades) {
@@ -487,7 +625,7 @@ function trailMaterials() {
   const common = { transparent: true, depthWrite: false, blending: glowBlend(), side: THREE.DoubleSide };
   const line = new THREE.ShaderMaterial({
     ...common,
-    uniforms: { uTime, uTrail, uSel, uPxScale, uGain, uWidth: { value: 2.6 } },
+    uniforms: { uTime, uTrail, uSel, uPxScale, uGain, uHard, uWidth: { value: 2.6 } },
     vertexShader: `
       uniform float uPxScale, uWidth;
       attribute vec3 aPrev, aNext, aColor; attribute float aSide, aTime;
@@ -503,9 +641,15 @@ function trailMaterials() {
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `${TRAIL_FRAG_HEAD}
-      uniform float uGain;
+      uniform float uGain, uHard;
       varying float vSide;
       void main() {
+        if (uHard > 0.5) { // pixel mode: a solid ribbon that breaks into dots as it ages
+          float t = trailAlpha();
+          if (t < 0.08 || (t < 0.45 && fract(vTime / 14.0) < 0.5)) discard;
+          gl_FragColor = vec4(min(vColor * 1.2, 1.0), 1.0);
+          return;
+        }
         float a = trailAlpha() * (1.0 - vSide * vSide);
         if (a < 0.004) discard;
         gl_FragColor = vec4(vColor * uGain, a);
@@ -513,7 +657,7 @@ function trailMaterials() {
   });
   const curtain = new THREE.ShaderMaterial({
     ...common,
-    uniforms: { uTime, uTrail, uSel, uCurtain },
+    uniforms: { uTime, uTrail, uSel, uCurtain, uHard },
     vertexShader: `
       attribute vec3 aColor; attribute float aTime, aV;
       varying float vTime, vV, vDist; varying vec3 vColor;
@@ -524,10 +668,10 @@ function trailMaterials() {
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `${TRAIL_FRAG_HEAD}
-      uniform float uCurtain;
+      uniform float uCurtain, uHard;
       varying float vV, vDist;
       void main() {
-        if (uTime < vTime) discard;
+        if (uTime < vTime || uHard > 0.5) discard;
         // fade out near the camera so flying alongside a trail doesn't flood the view
         float a = trailAlpha() * (0.02 + 0.2 * pow(vV, 4.0)) * smoothstep(400.0, 6000.0, vDist) * uCurtain;
         if (a < 0.004) discard;
@@ -692,19 +836,20 @@ const THEMES = {
   day:   { horizon: "#a9c9e6", zenith: "#2a6fc4", glow: "#3d3420", tint: [1.25, 1.3, 1.4], base: 0x2c5673, fog: 0.000011,
            bloom: [0.3, 1.0], gain: 0.85, hemi: [0xffffff, 0x8c9aa6, 1.9], sun: 3.0 },
 };
-function glowBlend() { return state.day ? THREE.NormalBlending : THREE.AdditiveBlending; }
+function glowBlend() { return state.day || pixelSize ? THREE.NormalBlending : THREE.AdditiveBlending; }
 
 function setDay(day) {
   state.day = day;
   const th = day ? THEMES.day : THEMES.night;
-  scene.fog.density = th.fog;
+  scene.fog.density = pixelSize ? 0 : th.fog; // haze is a gradient, and gradients turn to mush in a small palette
   FOG_COLOR.set(th.horizon); // shared by the fog and the sky's horizon band
   skyMat.uniforms.uZenith.value.set(th.zenith);
   skyMat.uniforms.uGlow.value.set(th.glow);
   stars.visible = !day;
   GROUND_TINT.setRGB(...th.tint);
   tileMats.forEach((m) => m.color.copy(GROUND_TINT));
-  groundBase.material.color.set(th.base);
+  groundBase.material.color.set(pixelSize ? new THREE.Color().setRGB(...FLAT[day ? "day" : "night"].water.map((v) => v / 255), THREE.SRGBColorSpace) : th.base);
+  tiles.forEach(applyTile);
   bloom.strength = th.bloom[0]; bloom.threshold = th.bloom[1];
   uGain.value = th.gain;
   hemi.color.set(th.hemi[0]); hemi.groundColor.set(th.hemi[1]); hemi.intensity = th.hemi[2];
@@ -717,6 +862,24 @@ function setDay(day) {
   }
   document.body.classList.toggle("day", day);
   $("dayBtn").classList.toggle("active", day);
+}
+
+// Pixel-art mode: low-resolution render and a small palette (see pixelPass),
+// a flat-colour map instead of the satellite photo, cartoon aircraft with
+// outlines, solid trails, and no bloom or haze.
+function setPixel(on) {
+  pixelSize = on ? 1 : 0; // resize() works out the real size
+  pixelPass.enabled = on;
+  bloom.enabled = !on;
+  uHard.value = on ? 1 : 0;
+  renderer.domElement.style.imageRendering = on ? "pixelated" : "";
+  for (const ac of state.aircraft) {
+    ac.real.visible = !on; ac.toon.visible = on;
+    ac.shadow.geometry = on ? SHADOW_BLOB : SHADOW_GEO;
+    ac.label.position.y = labelY(ac.model);
+  }
+  setDay(state.day);
+  resize();
 }
 
 // Follow the sun for the window being replayed, unless the viewer has chosen.
@@ -736,6 +899,9 @@ function airlineOf(flight) {
   return (m && AIRLINES[m[1]]) || null;
 }
 
+// Labels sit higher over the bigger pixel-mode aircraft so they don't cover them.
+const labelY = (model) => model.top + model.size * (pixelSize ? 0.3 : 0.08);
+
 function makeAircraft(rawAc) {
   const segs = buildSegments(rawAc);
   if (!segs.length) return null;
@@ -753,18 +919,29 @@ function makeAircraft(rawAc) {
 
   const group = new THREE.Group();
   group.rotation.order = "YXZ";
-  group.add(new THREE.Mesh(model.body, kind === "vehicle" ? VEHICLE_MAT : BODY_MAT));
-  group.add(new THREE.Mesh(model.fin, new THREE.MeshStandardMaterial({ color: tail, emissive: tail, emissiveIntensity: 0.55, roughness: 0.5 })));
+  // Two versions of the airframe share the group: the realistic one, and the cartoon one for pixel mode.
+  const real = new THREE.Group(), toon = new THREE.Group();
+  const finMats = [new THREE.MeshStandardMaterial({ color: tail, emissive: tail, emissiveIntensity: 0.55, roughness: 0.5 }), toonMat(tail)];
+  real.add(new THREE.Mesh(model.body, kind === "vehicle" ? VEHICLE_MAT : BODY_MAT), new THREE.Mesh(model.fin, finMats[0]));
+  const px = model.px;
+  const outline = new THREE.Mesh(px.hull, OUTLINE_MAT);
+  outline.renderOrder = -1;
+  toon.add(new THREE.Mesh(px.body, kind === "vehicle" ? TOON_VEHICLE : TOON_BODY), new THREE.Mesh(px.fin, finMats[1]), outline);
+  if (px.glass) toon.add(new THREE.Mesh(px.glass, GLASS_MAT));
+  real.visible = !pixelSize; toon.visible = !!pixelSize;
+  group.add(real, toon);
   const strobe = new THREE.Mesh(LIGHT_GEO, STROBE_MAT); strobe.position.set(0, model.top * 0.35, model.tailZ);
   strobe.scale.setScalar(model.lightR * 0.8);
   if (model.lights) {
     const [lx, ly, lz] = model.lights;
     const red = new THREE.Mesh(LIGHT_GEO, RED_MAT); red.position.set(-lx, ly, lz); red.scale.setScalar(model.lightR);
     const green = new THREE.Mesh(LIGHT_GEO, GREEN_MAT); green.position.set(lx, ly, lz); green.scale.setScalar(model.lightR);
-    group.add(red, green);
+    real.add(red, green);
   }
-  const spinners = [...model.props.map((p) => makeSpinner(p, 2)), ...model.rotors.map((p) => makeSpinner(p, 2))];
-  spinners.forEach((sp) => group.add(sp.pivot));
+  const spinners = [];
+  for (const [m, parent] of [[model, real], [px, toon]]) {
+    for (const p of [...m.props, ...m.rotors]) { const sp = makeSpinner(p, 2); parent.add(sp.pivot); spinners.push(sp); }
+  }
   const hit = new THREE.Mesh(HIT_GEO, HIT_MAT); hit.userData.ac = ac; hit.scale.setScalar(model.size);
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTexture, color: 0x8fe6ff, transparent: true, depthWrite: false, depthTest: false, blending: glowBlend() }));
   halo.scale.setScalar(model.size * 2.5); halo.visible = false;
@@ -780,17 +957,17 @@ function makeAircraft(rawAc) {
   el.addEventListener("click", (e) => { e.stopPropagation(); select(ac, true); });
   wrap.appendChild(el);
   const label = new CSS2DObject(wrap);
-  label.position.set(0, model.top + model.size * 0.08, 0);
+  label.position.set(0, labelY(model), 0);
   label.visible = false;
   group.add(label);
 
-  const shadow = new THREE.Mesh(SHADOW_GEO, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.4, depthWrite: false, blending: glowBlend() }));
+  const shadow = new THREE.Mesh(pixelSize ? SHADOW_BLOB : SHADOW_GEO, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.4, depthWrite: false, blending: glowBlend() }));
   shadow.visible = false;
 
   const mats = trailMaterials();
   const trails = segs.flatMap((s) => buildTrailMeshes(s, mats));
   worldGroup.add(group, shadow, ...trails);
-  Object.assign(ac, { group, strobe, spinners, hit, halo, label, el, elName: el.firstChild, elInfo: el.lastChild, shadow, mats, trails, phase: Math.random() });
+  Object.assign(ac, { group, real, toon, finMats, strobe, spinners, hit, halo, label, el, elName: el.firstChild, elInfo: el.lastChild, shadow, mats, trails, phase: Math.random() });
   return ac;
 }
 
@@ -798,7 +975,7 @@ function disposeWorld() {
   for (const ac of state.aircraft) {
     ac.trails.forEach((m) => m.geometry.dispose());
     ac.mats.line.dispose(); ac.mats.curtain.dispose();
-    ac.group.children[1].material.dispose();
+    ac.finMats.forEach((m) => m.dispose());
     ac.shadow.material.dispose();
     ac.label.removeFromParent(); ac.label.element.remove();
   }
@@ -1033,9 +1210,9 @@ function updateAircraft(now) {
     ac.shadow.visible = vis && c.alt >= 50;
     if (!vis) continue;
 
-    ac.scale = Math.max(MIN_PLANE_SCALE, camera.position.distanceTo(c.pos) * scaleK) * ac.model.boost * (ac === state.selected ? 1.25 : 1);
+    ac.scale = Math.max(MIN_PLANE_SCALE, camera.position.distanceTo(c.pos) * scaleK) * ac.model.boost * (ac === state.selected ? 1.25 : 1) * (pixelSize ? PIXEL_PLANE : 1);
     ac.group.position.copy(c.pos);
-    ac.group.position.y += ac.model.belly * ac.scale; // keep the wheels out of the tarmac
+    ac.group.position.y += (pixelSize ? ac.model.px : ac.model).belly * ac.scale; // keep the wheels out of the tarmac
     ac.group.rotation.set(c.pitch, -c.hdg, -c.bank);
     ac.group.scale.setScalar(ac.scale);
     ac.strobe.visible = (now / 1000 + ac.phase) % 1.3 < 0.09;
@@ -1046,7 +1223,7 @@ function updateAircraft(now) {
     altColor(c.alt, ac.color);
     ac.shadow.position.set(c.pos.x, 5, c.pos.z);
     ac.shadow.scale.setScalar(ac.scale * ac.model.size);
-    if (state.day) ac.shadow.material.color.setRGB(0, 0, 0); else ac.shadow.material.color.copy(ac.color);
+    if (state.day || pixelSize) ac.shadow.material.color.setRGB(0, 0, 0); else ac.shadow.material.color.copy(ac.color);
   }
   $("countAir").textContent = air;
   $("countAll").textContent = all;
@@ -1108,7 +1285,9 @@ function frame(now) {
   runDirector(now);
   updateCamera(dt);
   hooks.frame?.(dt, now);
-  uPxScale.value = (2 * Math.tan((camera.fov * DEG) / 2)) / renderer.domElement.clientHeight;
+  const pxScale = (2 * Math.tan((camera.fov * DEG) / 2)) / renderer.domElement.clientHeight; // world units per screen pixel, per unit of distance
+  uPxScale.value = pxScale * (pixelSize ? pixelSize * 0.75 : 1); // pixel mode: trails about two art pixels wide
+  uOutline.value = pxScale * pixelSize;
   slowUpdate(now);
 
   composer.render();
@@ -1235,6 +1414,10 @@ function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  if (pixelSize) pixelSize = clamp(Math.round(Math.min(w, h) / 225), 2, 6); // roughly 225 art pixels across the short side
+  const ratio = pixelSize ? 1 / pixelSize : Math.min(window.devicePixelRatio, 2);
+  renderer.setPixelRatio(ratio);
+  composer.setPixelRatio(ratio);
   renderer.setSize(w, h);
   composer.setSize(w, h);
   labelRenderer.setSize(w, h);
@@ -1317,6 +1500,6 @@ async function boot() {
   await loadWindow(windows[0].start, windows[0].end);
 }
 
-export const sky = { THREE, CSS2DObject, scene, camera, renderer, controls, bloom, state, hooks, KT, FT, VEX, flyHome, setPlaying };
+export const sky = { THREE, CSS2DObject, scene, camera, renderer, controls, bloom, state, hooks, KT, FT, VEX, flyHome, setPlaying, setPixel };
 
 boot();

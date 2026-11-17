@@ -8,7 +8,7 @@
 <title>Sky Hoops — ADS-B ring game</title>
 <meta name="description" content="Throw hoops ahead of real Sydney air traffic. An arcade game built on recorded ADS-B flight tracks.">
 <link rel="stylesheet" href="sky.css?v=3">
-<link rel="stylesheet" href="game.css?v=4">
+<link rel="stylesheet" href="game.css?v=5">
 <script type="importmap">
 {
   "imports": {
@@ -124,6 +124,7 @@
   <div id="gConfetti"></div>
   <button id="gMute" class="glass" title="Sound on/off (M)">♪ on</button>
   <button id="gVoice" class="glass" title="Tower voice on/off (V)">ATC on</button>
+  <button id="gPixel" class="glass" title="Pixel-art mode on/off (P)">8-bit off</button>
 
   <div id="gTitle" class="g-overlay hidden">
     <div class="g-card glass">
@@ -138,7 +139,7 @@
       </ol>
       <div class="g-pts"><span class="t1">15 s ahead · 100</span><span class="t2">45 s · 600</span><span class="t3">100 s · 2,000+</span></div>
       <button id="gStart" class="g-go">START <kbd>Space</kbd></button>
-      <div class="g-foot">Drag to look around · pinch or scroll to zoom<span class="keys"> · <kbd>M</kbd> sound · <kbd>V</kbd> tower voice · <kbd>N</kbd> day / night</span></div>
+      <div class="g-foot">Drag to look around · pinch or scroll to zoom<span class="keys"> · <kbd>M</kbd> sound · <kbd>V</kbd> tower voice · <kbd>P</kbd> pixel art · <kbd>N</kbd> day / night</span></div>
     </div>
   </div>
 
@@ -161,6 +162,6 @@
     <pre id="loadingDetail"></pre>
   </div>
 
-<script type="module" src="game.js?v=4"></script>
+<script type="module" src="game.js?v=6"></script>
 </body>
 </html>

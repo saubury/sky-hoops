@@ -7,7 +7,7 @@
 // goes through. Longer predictions are worth far more and miss far more often
 // (measured on real data: ~85% hit at 15 s, ~50% at 45 s, ~20% at 100 s).
 
-import { sky } from "./sky.js?v=3";
+import { sky } from "./sky.js?v=5";
 
 const { THREE, CSS2DObject, scene, camera, renderer, controls, state, hooks, KT, FT, VEX } = sky;
 const $ = (id) => document.getElementById(id);
@@ -320,14 +320,33 @@ const fx = new THREE.Group();
 scene.add(fx);
 const TORUS = new THREE.TorusGeometry(1, 0.075, 10, 56);
 const TORUS_THIN = new THREE.TorusGeometry(1, 0.022, 6, 56);
+// Pixel-art mode: chunkier rings (the thin ones would be under one art pixel) with visible corners.
+const TORUS_PX = new THREE.TorusGeometry(1, 0.15, 4, 20);
+const TORUS_THIN_PX = new THREE.TorusGeometry(1, 0.07, 4, 20);
+const P = { on: false, font: false };
+try { P.on = localStorage.getItem("sky.hoops.pixel") === "1"; } catch {}
+function setPixelMode(on) {
+  P.on = on;
+  if (on && !P.font) { // the pixel typeface is only fetched if the mode is used
+    P.font = true;
+    const link = document.createElement("link");
+    link.rel = "stylesheet"; link.href = "https://fonts.googleapis.com/css2?family=VT323&display=swap";
+    document.head.appendChild(link);
+  }
+  document.body.classList.toggle("pixel", on);
+  sky.setPixel(on);
+  $("gPixel").textContent = on ? "8-bit on" : "8-bit off";
+  try { localStorage.setItem("sky.hoops.pixel", on ? "1" : "0"); } catch {}
+}
 const DISC = new THREE.CircleGeometry(1, 40);
 const hdr = (rgb, k = 1) => new THREE.Color().setRGB(rgb[0] * k, rgb[1] * k, rgb[2] * k);
-const visRadius = (pos) => Math.max(HOOP_RADIUS, camera.position.distanceTo(pos) * 0.028);
+// Drawn size only: the hit test always uses HOOP_RADIUS. Pixel mode draws aircraft three times as big, so hoops grow to match.
+const visRadius = (pos) => Math.max(HOOP_RADIUS, camera.position.distanceTo(pos) * 0.028) * (P.on ? 2.4 : 1);
 
 function makeHoopMesh(tier, ghost = false) {
   const group = new THREE.Group();
-  const ring = new THREE.Mesh(TORUS, new THREE.MeshBasicMaterial({ color: hdr(tier.rgb), transparent: ghost, opacity: ghost ? 0.55 : 1 }));
-  const timing = new THREE.Mesh(TORUS_THIN, new THREE.MeshBasicMaterial({ color: hdr(tier.rgb, 0.7), transparent: true, opacity: 0.8 }));
+  const ring = new THREE.Mesh(P.on ? TORUS_PX : TORUS, new THREE.MeshBasicMaterial({ color: hdr(tier.rgb), transparent: ghost, opacity: ghost ? 0.55 : 1 }));
+  const timing = new THREE.Mesh(P.on ? TORUS_THIN_PX : TORUS_THIN, new THREE.MeshBasicMaterial({ color: hdr(tier.rgb, 0.7), transparent: true, opacity: 0.8 }));
   const disc = new THREE.Mesh(DISC, new THREE.MeshBasicMaterial({ color: hdr(tier.rgb, 0.4), transparent: true, opacity: 0.13, side: THREE.DoubleSide, depthWrite: false }));
   group.add(ring, timing, disc);
   group.userData = { ring, timing, disc };
@@ -388,7 +407,7 @@ function updateSparks(dt) {
 
 const waves = [];
 function shockwave(pos, rotY, rgb, size, dur = 0.7, grow = 3.5) {
-  const mesh = new THREE.Mesh(TORUS_THIN, new THREE.MeshBasicMaterial({ color: hdr(rgb, 1.3), transparent: true, depthWrite: false }));
+  const mesh = new THREE.Mesh(P.on ? TORUS_THIN_PX : TORUS_THIN, new THREE.MeshBasicMaterial({ color: hdr(rgb, 1.3), transparent: true, depthWrite: false }));
   mesh.position.copy(pos); mesh.rotation.y = rotY;
   fx.add(mesh);
   waves.push({ mesh, age: 0, dur, size, grow });
@@ -842,6 +861,7 @@ hooks.key = (e) => {
   if (k === " " || k === "enter") { e.preventDefault(); if (G.phase === "title" || G.phase === "over") startGame(); return true; }
   if (k === "m") { setMuted(!A.muted); return true; }
   if (k === "v") { setVoice(!V.on); return true; }
+  if (k === "p") { setPixelMode(!P.on); return true; }
   if (k === "escape") { if (G.phase === "play" || G.phase === "count") toTitle(); return true; }
   return ["1", "2", "3", "4", "5", "6", "arrowleft", "arrowright", "d"].includes(k); // Sky-view shortcuts that make no sense mid-game
 };
@@ -851,7 +871,9 @@ $("gStart").addEventListener("click", startGame);
 $("gAgain").addEventListener("click", startGame);
 $("gMute").addEventListener("click", () => { initAudio(); setMuted(!A.muted); });
 $("gVoice").addEventListener("click", () => { initAudio(); setVoice(!V.on); });
+$("gPixel").addEventListener("click", () => setPixelMode(!P.on));
 setMuted(A.muted);
+setPixelMode(P.on);
 setVoice(V.on && !!V.synth);
 if (!V.synth) $("gVoice").classList.add("hidden");
 renderAmmo();

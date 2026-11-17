@@ -98,8 +98,9 @@ body.fever #vignette { background: radial-gradient(ellipse at center, transparen
 #gConfetti i { position: absolute; top: -20px; width: 10px; height: 16px; animation: fall linear forwards; }
 @keyframes fall { to { transform: translate(var(--dx), 110vh) rotate(var(--rot)); } }
 
-#gMute, #gVoice { left: 16px; bottom: 16px; font-family: var(--mono); font-size: 12px; padding: 8px 12px; color: var(--ink); z-index: 22; }
+#gMute, #gVoice, #gPixel { left: 16px; bottom: 16px; font-family: var(--mono); font-size: 12px; padding: 8px 12px; color: var(--ink); z-index: 22; }
 #gVoice { left: 88px; }
+#gPixel { left: 174px; }
 
 /* Title / countdown / game over */
 .g-overlay { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(3, 8, 16, 0.35), rgba(3, 8, 16, 0.75)); }
@@ -154,7 +155,7 @@ body.game { -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-
 body.game .tag { touch-action: none; }
 body.game #brand { z-index: 45; } /* stays usable above the title screen so the sample can be switched */
 .g-overlay { touch-action: pan-y; }
-.g-go, #gMute, #gVoice { touch-action: manipulation; }
+.g-go, #gMute, #gVoice, #gPixel { touch-action: manipulation; }
 
 @media (pointer: coarse) {
   .g-go kbd, .g-foot .keys { display: none; }
@@ -175,6 +176,7 @@ body.game #brand { z-index: 45; } /* stays usable above the title screen so the 
   body.game #credit { right: 8px; bottom: calc(6px + env(safe-area-inset-bottom)); font-size: 8px; max-width: 60vw; text-align: right; }
   #gMute { left: calc(8px + env(safe-area-inset-left)); bottom: calc(8px + env(safe-area-inset-bottom)); }
   #gVoice { left: calc(80px + env(safe-area-inset-left)); bottom: calc(8px + env(safe-area-inset-bottom)); }
+  #gPixel { left: calc(166px + env(safe-area-inset-left)); bottom: calc(8px + env(safe-area-inset-bottom)); }
 
   /* Title / results: scroll if needed, and the button comes before the instructions */
   .g-overlay { overflow-y: auto; -webkit-overflow-scrolling: touch; place-items: start center;
@@ -237,4 +239,27 @@ body.game #brand { z-index: 45; } /* stays usable above the title screen so the 
   #gCallText { font-size: 15px; }
   #gToast { top: 158px; }
   .g-overlay { padding-top: calc(56px + env(safe-area-inset-top)); }
+}
+
+/* ===== Pixel-art mode (body.pixel): the 3D view is rendered small and scaled
+   up with hard edges by the engine; this squares off the HUD to match. ===== */
+body.pixel { --mono: "VT323", ui-monospace, Menlo, Consolas, monospace; font-family: var(--mono); -webkit-font-smoothing: none; font-smooth: never; }
+body.pixel #stage canvas { image-rendering: crisp-edges; image-rendering: pixelated; }
+body.pixel * { border-radius: 0 !important; font-style: normal !important; }
+body.pixel .glass { background: rgba(5, 10, 22, 0.94); -webkit-backdrop-filter: none; backdrop-filter: none; border: 2px solid #5ad7ff; box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.7); }
+body.pixel .tag { background: rgba(5, 10, 22, 0.94); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7); }
+body.pixel .tag b { font-size: 16px; }
+body.pixel .tag i { font-size: 13px; }
+body.pixel .g-label { font-size: 13px; }
+body.pixel #gBest { font-size: 15px; }
+body.pixel #gMute, body.pixel #gVoice, body.pixel #gPixel { font-size: 16px; padding: 6px 12px; }
+body.pixel #gCallText { font-size: 22px; }
+body.pixel .g-how, body.pixel .g-tag { font-size: 18px; line-height: 1.25; }
+body.pixel .g-foot, body.pixel .g-pts, body.pixel .brand-sub, body.pixel #counts, body.pixel #credit { font-size: 14px; }
+body.pixel .pop small { font-size: 14px; }
+body.pixel #gScore, body.pixel #gToast div, body.pixel .pop, body.pixel #gCountNum, body.pixel #gFinal, body.pixel #gCombo { text-shadow: 3px 3px 0 #000; -webkit-text-stroke: 0; }
+body.pixel #gTimerArc, body.pixel #gAmmo span, body.pixel #gFeverBar i, body.pixel #gCharge { filter: none; box-shadow: none; }
+body.pixel #gTimerArc { stroke-linecap: butt; }
+@media (max-width: 760px), (max-height: 520px) {
+  body.pixel .g-how, body.pixel .g-tag { font-size: 15px; }
 }
